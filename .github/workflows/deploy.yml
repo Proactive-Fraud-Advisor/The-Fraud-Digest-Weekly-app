@@ -1,0 +1,61 @@
+# Name of our automated workflow
+name: Deploy Fraud News Agent to AWS Lambda
+
+# This section defines the trigger: run this workflow on a push to the 'main' branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    # This job will run on a fresh, clean version of Ubuntu Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out a copy of your code from the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the Python environment to match our Lambda runtime
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' 
+
+      # Step 3: Create a directory to hold the package contents
+      - name: Create package directory
+        run: mkdir ./package
+
+      # Step 4: Install our project's dependencies into the package directory
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -t ./package
+
+      # Step 5: Add our function code to the package directory
+      - name: Add function code to package
+        run: cp lambda_function.py ./package/
+
+      # Step 6: Create the zip file from the contents of the package folder
+      - name: Zip deployment package
+        run: |
+          cd package
+          zip -r ../deployment_package.zip .
+
+      # Step 7: Configure the AWS credentials using the secrets we stored in GitHub
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # ------------------------------------------------------------------
+          # ▼▼▼ IMPORTANT! CHANGE THIS TO YOUR AWS REGION! ▼▼▼
+          aws-region: eu-north-1 
+          # ------------------------------------------------------------------
+
+      # Step 8: Deploy the zip file to AWS Lambda using the AWS CLI
+      - name: Deploy to AWS Lambda
+        run: aws lambda update-function-code --function-name FraudNewsAgent --zip-file fileb://deployment_package.zip
+
+
