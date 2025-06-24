@@ -115,7 +115,7 @@ def post_to_linkedin(post_text, secrets):
 
 def lambda_handler(event, context):
     """Main function for AWS Lambda."""
-    print("Agent starting...")
+    print("Agent starting now !!!")
     try:
         secrets = get_secrets()
         
