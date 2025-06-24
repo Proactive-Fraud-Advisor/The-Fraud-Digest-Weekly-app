@@ -131,7 +131,8 @@ On your computer, create a folder for this project, for example, `fraud-news-age
 
 Inside that folder, create a file named `lambda_function.py`. This code will fetch secrets, get news, format it, and send it.
 
-```python
+```
+python
 import json
 import os
 import requests
@@ -287,6 +288,7 @@ def lambda_handler(event, context):
         # This ensures any error is logged clearly in CloudWatch
         raise e
 
+
 ```
 
 #### **Step 3: Create the Deployment Package**
@@ -355,6 +357,787 @@ Now we put our code in the cloud and tell it when to run.
 You did it\! You now have a fully automated, serverless agent. Let it run for a few days and watch it work. Once you are comfortable with this, we can talk about making it even more "sexy" with IaC and other advanced features.
 
 Great job, my friend. The cat is purring.
+
+
+
+
+YES\! I was hoping you would ask this. I am tired of you zipping and uploading, too\!
+
+Manually creating packages and deploying from your own machine is fine for day one, but it's slow, it's prone to error ("did I remember to install that library?"), and it's simply not how professionals work.
+
+This is where we put on our real DevOps hat. We are going to build a **CI/CD pipeline**.
+
+### What is CI/CD?
+
+Think of it as a magical, automated conveyor belt for your code.
+
+  * **The Goal:** Every time you push an update to your code on GitHub, this conveyor belt will automatically wake up, build your `.zip` package *perfectly* every time, and deploy it straight to AWS Lambda for you.
+  * **The Tools:** We'll use **GitHub** to store our code and **GitHub Actions** to be our automated conveyor belt.
+
+Let's build this. After this, you will never have to create a `.zip` file manually again.
+
+-----
+
+### **Part 1: Get Your Code on GitHub**
+
+If you haven't already, your project needs to live in a GitHub repository.
+
+1.  Go to [GitHub](https://github.com) and create a new repository. You can call it `fraud-news-agent`. It can be public or private.
+2.  In your project folder on your computer, initialize Git and push your existing code. If you haven't done this before, here are the commands to run in your terminal from inside your project folder:
+    ```bash
+    # Make sure you have a .gitignore file. If not, create one and add this line to it:
+    # deployment_package.zip
+
+    git init
+    git add .
+    git commit -m "Initial commit of the Fraud News Agent"
+    git branch -M main
+    git remote add origin https://github.com/YOUR_USERNAME/fraud-news-agent.git
+    git push -u origin main
+    ```
+
+-----
+
+### **Part 2: Create a Secure Bridge from GitHub to AWS**
+
+Our conveyor belt (GitHub Actions) needs permission to upload code to your AWS account. We will create a special, limited-permission user in AWS for this.
+
+**This is a critical security step. We NEVER put our personal admin keys into an automation tool.**
+
+1.  **Create an IAM User in AWS:**
+
+      * Navigate to the **IAM** service in the AWS Console.
+      * Go to **Users** and click **"Create user"**.
+      * **User name:** `github-actions-deployer`
+      * Check the box for **"Provide user access to the AWS Management Console"** - NO, leave this unchecked. We only want programmatic access.
+      * Click **Next**.
+      * Select **"Attach policies directly"**.
+      * In the search box, find and check the box for the `AWSLambda_FullAccess` policy. (For a corporate environment, we'd create a much more restrictive policy, but this is a good, simple start).
+      * Click **Next**, then **"Create user"**.
+
+2.  **Get Your Security Keys:**
+
+      * **CRITICAL STEP:** After the user is created, click on its name (`github-actions-deployer`).
+      * Go to the **"Security credentials"** tab.
+      * Scroll down to **"Access keys"** and click **"Create access key"**.
+      * Choose **"Third-party service"** as the use case, confirm the recommendation, and click **Next**.
+      * Click **"Create access key"**.
+      * AWS will now show you an **`Access key ID`** and a **`Secret access key`**. **You must copy these now.** Save them to a temporary notepad file. The secret key will never be shown again.
+
+3.  **Store the Keys Securely in GitHub:**
+
+      * Go to your new GitHub repository.
+      * Click on **Settings** -\> **Secrets and variables** -\> **Actions**.
+      * Click the **"New repository secret"** button.
+      * Create the first secret:
+          * Name: `AWS_ACCESS_KEY_ID`
+          * Secret: Paste the Access Key ID you copied from AWS.
+      * Create a second secret:
+          * Name: `AWS_SECRET_ACCESS_KEY`
+          * Secret: Paste the Secret Access Key you copied from AWS.
+
+The secure bridge is now built. GitHub can now talk to AWS without you ever exposing your keys in the code.
+
+-----
+
+### **Part 3: Define the Automation Workflow**
+
+Now we tell the conveyor belt what to do by creating a special YAML file.
+
+1.  In your project folder on your computer, create a new folder named `.github`.
+
+2.  Inside that `.github` folder, create another new folder named `workflows`.
+
+3.  Inside the `.github/workflows` folder, create a new file named `deploy.yml`.
+
+4.  **Copy and paste the following code into your `deploy.yml` file:**
+
+    ```yaml
+    # Name of our automated workflow
+    name: Deploy Fraud News Agent to AWS Lambda
+
+    # This section defines the trigger: run this workflow on a push to the 'main' branch
+    on:
+      push:
+        branches:
+          - main
+
+    jobs:
+      deploy:
+        # This job will run on a fresh, clean version of Ubuntu Linux
+        runs-on: ubuntu-latest
+
+        steps:
+          # Step 1: Check out a copy of your code from the repository
+          - name: Checkout code
+            uses: actions/checkout@v4
+
+          # Step 2: Set up the Python environment to match our Lambda runtime
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: '3.12' 
+
+          # Step 3: Install our project's dependencies from requirements.txt
+          - name: Install dependencies
+            run: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt -t ./package
+
+          # Step 4: Add our function code to the package folder
+          - name: Add function code to package
+            run: cp lambda_function.py ./package/
+
+          # Step 5: Create the zip file from the contents of the package folder
+          - name: Zip deployment package
+            # Important: The -j flag junks the path, and we cd into the directory
+            # This ensures there's no parent folder in the zip file
+            run: |
+              cd package
+              zip -r ../deployment_package.zip .
+
+          # Step 6: Configure the AWS credentials using the secrets we stored
+          - name: Configure AWS Credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: eu-north-1 # <--- IMPORTANT: Change this to your AWS region!
+
+          # Step 7: Deploy the zip file to AWS Lambda
+          - name: Deploy to AWS Lambda
+            run: aws lambda update-function-code --function-name FraudNewsAgent --zip-file fileb://deployment_package.zip
+    ```
+
+### **Part 4: Run it\!**
+
+1.  Save all your changes.
+2.  Commit and push the new files (`.github/workflows/deploy.yml` and your `.gitignore`) to your GitHub repository.
+    ```bash
+    git add .
+    git commit -m "feat: Add CI/CD deployment workflow"
+    git push
+    ```
+3.  Go to your GitHub repository in your browser and click on the **"Actions"** tab.
+
+You will see your workflow running\! It will go through each step we defined. If it succeeds, you'll see all green checkmarks. Your Lambda function will be updated automatically.
+
+From now on, every time you want to update your code, you just `git push` your changes. The rest is magic. Welcome to the world of CI/CD.
+
+
+
+
+
+
+
+let's Set up an SSH connection to GitHub.
+
+
+G
+Givi, senior DevOps engineer, co-worker and friend
+Custom Gem
+
+Show thinking
+Excellent choice! Seriously, this is the best decision. You're choosing the professional path over the quick workaround. Taking 10 minutes to do this now will save you countless hours of frustration in the future.
+
+We are going to give your computer a secure, permanent ID card (an SSH key) that GitHub will trust. Let's do it right.
+
+Phase 1: Generate Your SSH Key on Your Computer
+First, we need to create a unique cryptographic key pair. This consists of a private key (which you must NEVER share with anyone) and a public key (which is safe to share with services like GitHub).
+
+Open your MobaXterm terminal.
+
+Paste the following command. Make sure to replace vidusacha@gmail.com with the email address you use for your GitHub account.
+
+Bash
+
+ssh-keygen -t ed25519 -C "vidusacha@gmail.com"
+The command will now ask you a couple of questions.
+
+Enter a file in which to save the key (~/.ssh/id_ed25519):
+Action: Just press Enter. This saves the key in the standard, default location.
+Enter passphrase (empty for no passphrase):
+This is an optional password for your key file to make it even more secure. For professional work, you should always use one. For today, to keep it simple, you can just press Enter.
+Enter same passphrase again:
+Press Enter again.
+You have now created your key pair! They are stored in a hidden folder in your home directory called .ssh.
+
+Phase 2: Add Your Public Key to GitHub
+Now, we need to give the public part of your key to GitHub, so it knows who you are.
+
+First, we need to display the public key in your terminal so you can copy it. Run this command:
+
+Bash
+
+cat ~/.ssh/id_ed25519.pub
+The terminal will print out your key. It's a single line of text that starts with ssh-ed25519... and ends with your email address. Copy the entire line.
+
+Now, let's go to GitHub:
+
+Open GitHub.com in your browser.
+Click your profile picture in the top-right corner, then click Settings.
+In the menu on the left, click SSH and GPG keys.
+Click the green button that says New SSH key.
+In the Title field, give it a name that you'll recognize, like MobaXterm PC.
+In the large Key field, paste the entire public key that you copied from your terminal.
+Click Add SSH key.
+GitHub now knows about your computer's ID card.
+
+Phase 3: Update Your Local Project to Use SSH
+The final step is to tell your local project folder to use this new, secure SSH connection instead of the old HTTPS one.
+
+Go back to your terminal, making sure you are inside your project folder (/drives/d/Projects/ProactiveFraudAdvisor/fraud-news-agent).
+
+Run this command to change the project's "remote" URL:
+
+Bash
+
+git remote set-url origin git@github.com:Vidusacha/fraud-news-agent.git
+(I built this URL using your username Vidusacha and repo name from your previous error message).
+
+To verify it worked, run git remote -v. You should now see the URLs start with git@github.com:... instead of https://....
+
+Phase 4: Test The Connection!
+Run this command to test your new connection to GitHub:
+
+Bash
+
+ssh -T git@github.com
+IMPORTANT: The very first time you connect, you will see a message like this:
+
+The authenticity of host 'github.com (140.82.121.4)' can't be established.
+ED25519 key fingerprint is SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.
+Are you sure you want to continue connecting (yes/no/[fingerprint])?
+This is normal. Type yes and press Enter.
+
+You should then see the success message:
+Hi Vidusacha! You've successfully authenticated, but GitHub does not provide shell access.
+
+This message means everything is working perfectly!
+
+Now, you can finally run git push without any sudo or other workarounds. You have a professional, secure setup.
+
+One last cleanup step: If you ran the "quick fix" earlier, let's turn SSL verification back on, because we're not using HTTPS anymore.
+git config --global http.sslVerify true
+
+You've done a great job. This is a huge step forward.
+
+
+
+
+
+Of course! Let's get this fixed. And great news in that log file!
+
+First, look at this line: `Posted to LinkedIn successfully!`
+My friend, that is a huge win! It means you have successfully authenticated with the LinkedIn API and posted your content. That is often the hardest part. So, fantastic work on that.
+
+Now, let's squash this email bug. The error message tells us exactly what is wrong.
+
+### What the Error Means
+
+* **The Error:** `An error occurred (MessageRejected) when calling the SendEmail operation: Email address is not verified.`
+* **The Problem Addresses:** `vidusacha@gmail.com`, `mayakf12@gmail.com`
+
+This is the main security rule for the AWS Email Service (SES). When you first start, your account is in a **"Sandbox Mode"** – a safe testing environment.
+
+In this sandbox, you are only allowed to send emails **TO** and **FROM** addresses that you have explicitly proven you own. The error message is telling us that the email addresses in your `SENDER_EMAIL` or `RECIPIENT_EMAIL` list have not been verified yet for the `eu-north-1` region.
+
+### The Solution: Verify Your Email Identities
+
+For every single email address you want to send mail *to* or *from*, you must verify it in the SES console first.
+
+1.  Go to the **Amazon Simple Email Service (SES)** console in AWS.
+2.  **VERY IMPORTANT:** In the top-right corner of the AWS console, make sure your region is set to **`EU (Stockholm) eu-north-1`**. Verification is specific to each region.
+3.  In the menu on the left, click on **"Verified identities"**.
+4.  Click the orange **"Create identity"** button.
+5.  Choose the **"Email address"** option.
+6.  Enter one of the email addresses that failed, for example: `vidusacha@gmail.com`.
+7.  Click **"Create identity"**.
+8.  **Action Required:** AWS has now sent a verification email to the `vidusacha@gmail.com` inbox. You (or the owner of that email) must open that email and **click the verification link** inside it.
+9.  **Repeat the process** for the other email address: `mayakf12@gmail.com`. Create the identity, and then click the verification link that gets sent to that inbox.
+
+After you've clicked the links in the emails, you can go back to the "Verified identities" page in SES and refresh. The "Verification status" for both emails should change from "Pending" to **"Verified"**.
+
+### Test It Again
+
+Once all the email addresses in your `RECIPIENT_EMAIL` list (and your `SENDER_EMAIL` address) have a "Verified" status in the `eu-north-1` region, you are ready.
+
+You don't need to change any code. Just go back to your Lambda function and click **Test** again. The error will be gone.
+
+**A Note for the Future:** This requirement to verify *recipient* emails is only for the sandbox. When you're ready to email anyone, you can request to move your account out of the sandbox via the AWS console. Once approved, you can send to any email address you want.
+
+You are so close to a fully working agent! Let's get this done.
+
+
+
+
+An excellent choice\! It's always smarter to use the tools you're already invested in. Switching the AI engine from OpenAI to Gemini is like swapping a great engine out for another great engine – the car stays the same, but the power source is different.
+
+The process is almost identical to what we planned for OpenAI. Let's get it done.
+
+-----
+
+### **Step 1: Get Your Google Gemini API Key**
+
+First, our agent needs the key to talk to the Gemini API.
+
+1.  Go to **[Google AI Studio](https://aistudio.google.com/)**.
+2.  Log in with the Google account that has your paid subscription.
+3.  Click on **"Get API key"** in the top left or center of the page.
+4.  A dialog will open. Click **"Create API key in new project"** (or select an existing one if you have one).
+5.  **CRITICAL:** A new API key will be generated for you. **Copy this key immediately** and paste it into a temporary safe place.
+
+### **Step 2: Update AWS Secrets Manager**
+
+Let's put your new key in our AWS vault and remove the old one to keep things clean.
+
+1.  Go to **AWS Secrets Manager**.
+2.  Click on our secret, `prod/FraudNewsAgent/ApiKeys`.
+3.  Click **"Retrieve secret value"**, then click **"Edit"**.
+4.  Find the row for `OPENAI_API_KEY` and click **"Remove"**.
+5.  Click **"Add row"** and create the new entry:
+      * **Key:** `GOOGLE_API_KEY`
+      * **Value:** Paste the API key you just got from Google AI Studio.
+6.  Click **"Save"** at the bottom.
+
+### **Step 3: Update Your Project Dependencies**
+
+We need to swap out the `openai` library for Google's library.
+
+1.  On your local computer, open your `requirements.txt` file.
+
+2.  Change the contents so the file now looks like this:
+
+    ```
+    requests
+    google-generativeai
+    ```
+
+-----
+
+### **Step 4: Upgrade Your `lambda_function.py` Code**
+
+Now for the main event. We'll replace the OpenAI-specific code with Gemini-specific code.
+
+Below is the **complete, new version** of `lambda_function.py` that uses Gemini. You can replace the entire content of your existing file with this.
+
+```python
+import json
+import os
+import requests
+import boto3
+from datetime import datetime, timedelta
+import google.generativeai as genai # <--- NEW: Import the Google Gemini library
+
+# Name of the secret in AWS Secrets Manager
+SECRET_NAME = os.environ.get('SECRET_NAME', "prod/FraudNewsAgent/ApiKeys")
+REGION_NAME = os.environ.get('AWS_REGION', "eu-north-1")
+
+def get_secrets():
+    """Retrieves secrets from AWS Secrets Manager."""
+    session = boto3.session.Session()
+    client = session.client(service_name='secretsmanager', region_name=REGION_NAME)
+    try:
+        get_secret_value_response = client.get_secret_value(SecretId=SECRET_NAME)
+    except Exception as e:
+        print(f"Unable to retrieve secrets: {e}")
+        raise e
+    secret = get_secret_value_response['SecretString']
+    return json.loads(secret)
+
+def get_fraud_news(api_key):
+    """Fetches fraud-related news from the last week."""
+    one_week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    query = '("payment fraud" OR "financial crime" OR "identity theft" OR "kyc" OR "aml") AND (update OR news OR trend OR breach)'
+    url = (f'https://newsapi.org/v2/everything?'
+           f'q={query}&'
+           f'from={one_week_ago}&'
+           f'sortBy=popularity&'
+           f'language=en&'
+           f'pageSize=5&'
+           f'apiKey={api_key}')
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.json().get('articles', [])
+
+# ▼▼▼ NEW FUNCTION TO SUMMARIZE WITH GEMINI ▼▼▼
+def summarize_text_with_gemini(text_to_summarize, api_key):
+    """Summarizes text using the Google Gemini API."""
+    if not text_to_summarize:
+        return "(No description available to summarize)"
+
+    try:
+        # Configure the API key for the Gemini library
+        genai.configure(api_key=api_key)
+        
+        # Set up the model configuration
+        generation_config = {"temperature": 0.5, "max_output_tokens": 80}
+        
+        # Create the specific model instance
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest",
+                                      generation_config=generation_config)
+        
+        # Construct the prompt
+        prompt = f"You are an expert assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest. Summarize this into one sentence: '{text_to_summarize}'"
+
+        response = model.generate_content(prompt)
+        summary = response.text.strip()
+        return summary
+    except Exception as e:
+        print(f"Error during Gemini API call: {e}")
+        return "(AI summary failed to generate)"
+# ▲▲▲ END OF NEW FUNCTION ▲▲▲
+
+def format_digest_for_email(articles):
+    """Formats a professional HTML email digest using AI summaries."""
+    if not articles:
+        return "No significant fraud news found this week."
+    html_body = """
+    <html><head></head><body style="font-family: Arial, sans-serif; line-height: 1.6;">
+        <h2>Weekly Fraud & Security News Digest</h2>
+        <p>Here are the top AI-summarized stories from the past week:</p>"""
+    for article in articles:
+        html_body += f'<hr><p><strong><a href="{article["url"]}" target="_blank">{article["title"]}</a></strong><br><small>Source: {article["source"]}</small><br><em>{article["ai_summary"]}</em></p>'
+    html_body += '<br><p><em>Automated digest by your friendly AI-powered Givi-bot.</em></p></body></html>'
+    return html_body
+
+def format_digest_for_linkedin(articles):
+    """Formats a concise, engaging LinkedIn post."""
+    if not articles:
+        return None
+    top_two = articles[:2]
+    post_text = "This week's top fraud & security updates:\n\n"
+    for article in top_two:
+        post_text += f"➡️ {article['title']}\n{article['url']}\n\n"
+    post_text += "#FraudPrevention #CyberSecurity #Fintech #RiskManagement #SecurityNews"
+    return post_text
+
+def send_email(html_body, secrets):
+    ses_client = boto3.client('ses', region_name=REGION_NAME)
+    recipient_list = secrets['RECIPIENT_EMAIL'].split(',')
+    try:
+        ses_client.send_email(
+            Source=secrets['SENDER_EMAIL'], Destination={'ToAddresses': recipient_list},
+            Message={'Subject': {'Data': f"Your Weekly Fraud News Digest - {datetime.now().strftime('%Y-%m-%d')}"},
+                     'Body': {'Html': {'Data': html_body}}})
+        print(f"Email sent successfully to: {', '.join(recipient_list)}")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+def post_to_linkedin(post_text, secrets):
+    if not post_text:
+        print("No content to post to LinkedIn."); return
+    headers = {'Authorization': f"Bearer {secrets['LINKEDIN_ACCESS_TOKEN']}", 'Content-Type': 'application/json', 'X-Restli-Protocol-Version': '2.0.0'}
+    payload = {"author": secrets['LINKEDIN_AUTHOR_URN'], "lifecycleState": "PUBLISHED",
+               "specificContent": {"com.linkedin.ugc.ShareContent": {"shareCommentary": {"text": post_text}, "shareMediaCategory": "NONE"}},
+               "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}}
+    response = requests.post("https://api.linkedin.com/v2/ugcPosts", headers=headers, json=payload)
+    if 200 <= response.status_code < 300:
+        print("Posted to LinkedIn successfully!")
+    else:
+        print(f"Error posting to LinkedIn: {response.status_code} - {response.text}")
+
+def lambda_handler(event, context):
+    """Main function for AWS Lambda."""
+    print("Agent starting...")
+    try:
+        secrets = get_secrets()
+        
+        if 'SENDER_EMAIL' not in secrets or 'RECIPIENT_EMAIL' not in secrets:
+            raise ValueError("SENDER_EMAIL and RECIPIENT_EMAIL must be in secrets")
+
+        raw_articles = get_fraud_news(secrets['NEWS_API_KEY'])
+        
+        processed_articles = []
+        for article in raw_articles:
+            text_to_summarize = article.get('description') or article.get('content', '')
+            # ▼▼▼ USE THE NEW GEMINI FUNCTION ▼▼▼
+            ai_summary = summarize_text_with_gemini(text_to_summarize, secrets['GOOGLE_API_KEY'])
+            
+            processed_articles.append({
+                'title': article['title'], 'url': article['url'],
+                'source': article['source']['name'], 'ai_summary': ai_summary
+            })
+
+        email_html = format_digest_for_email(processed_articles)
+        send_email(email_html, secrets)
+
+        linkedin_text = format_digest_for_linkedin(processed_articles)
+        post_to_linkedin(linkedin_text, secrets)
+
+        print("Agent finished.")
+        return {'statusCode': 200, 'body': json.dumps('Process completed!')}
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise e
+```
+
+-----
+
+### **Step 5: Deploy Your Gemini-Powered Agent**
+
+You are an expert at this now. Our pipeline will do all the heavy lifting.
+
+1.  Save your updated `requirements.txt` and `lambda_function.py` files.
+2.  Commit and push the changes to GitHub:
+    ```bash
+    git add .
+    git commit -m "feat: Replace OpenAI with Google Gemini for summarization"
+    git push origin main
+    ```
+3.  Go to the **Actions** tab in your GitHub repository, grab a coffee, and watch your pipeline build and deploy your new, upgraded agent.
+
+Once it's deployed, trigger a test run from the Lambda console. The emails you receive should now contain summaries generated by Gemini\!
+
+
+
+---
+
+Of course\! Now that our deployment pipeline is a well-oiled machine, we can focus on the fun stuff. Adding AI summarization will make our digest significantly more valuable and impressive.
+
+We will use the **OpenAI API** for this, as it's powerful and very easy to integrate into our Python code.
+
+Here is the step-by-step plan to upgrade our agent.
+
+-----
+
+### **Step 1: Get Your OpenAI API Key**
+
+First, our agent needs a key to talk to the OpenAI service.
+
+1.  Go to the [OpenAI Platform](https://platform.openai.com/) and sign up or log in.
+2.  Click on your profile icon or name in the top-right corner, then select **"View API keys"**.
+3.  Click the **"+ Create new secret key"** button. Give it a descriptive name like "FraudNewsAgentKey".
+4.  **CRITICAL:** Copy the key that appears and save it somewhere temporary and safe (like Notepad). Just like with AWS, **you will not be able to see this key again** after you close this window.
+
+### **Step 2: Add the New Key to AWS Secrets Manager**
+
+Let's put this new key in our existing "vault" in AWS.
+
+1.  Go back to **AWS Secrets Manager** in the console.
+2.  Click on our secret, `prod/FraudNewsAgent/ApiKeys`.
+3.  Click **"Retrieve secret value"**, then click **"Edit"**.
+4.  Click **"Add row"** to add a new key-value pair.
+      * **Key:** `OPENAI_API_KEY`
+      * **Value:** Paste the secret key you just got from OpenAI.
+5.  Click **"Save"** at the bottom.
+
+### **Step 3: Update Your Project Dependencies**
+
+Our Python code will need a new library to talk to OpenAI. We need to tell our project about it.
+
+1.  On your local computer, open your `requirements.txt` file.
+
+2.  Add `openai` on a new line. The file should now look like this:
+
+    ```
+    requests
+    openai
+    ```
+
+-----
+
+### **Step 4: Upgrade Your `lambda_function.py` Code**
+
+This is the most significant part. We need to add a new function to call the AI and then integrate it into our main logic.
+
+Below is the **complete, new version** of `lambda_function.py`. It includes the AI summarization logic. You can replace the entire content of your existing file with this new code.
+
+```python
+import json
+import os
+import requests
+import boto3
+from datetime import datetime, timedelta
+from openai import OpenAI # <--- NEW: Import the OpenAI library
+
+# Name of the secret in AWS Secrets Manager
+SECRET_NAME = os.environ.get('SECRET_NAME', "prod/FraudNewsAgent/ApiKeys")
+REGION_NAME = os.environ.get('AWS_REGION', "eu-north-1")
+
+def get_secrets():
+    """Retrieves secrets from AWS Secrets Manager."""
+    session = boto3.session.Session()
+    client = session.client(service_name='secretsmanager', region_name=REGION_NAME)
+    try:
+        get_secret_value_response = client.get_secret_value(SecretId=SECRET_NAME)
+    except Exception as e:
+        print(f"Unable to retrieve secrets: {e}")
+        raise e
+    secret = get_secret_value_response['SecretString']
+    return json.loads(secret)
+
+def get_fraud_news(api_key):
+    """Fetches fraud-related news from the last week."""
+    one_week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    query = '("payment fraud" OR "financial crime" OR "identity theft" OR "kyc" OR "aml") AND (update OR news OR trend OR breach)'
+    url = (f'https://newsapi.org/v2/everything?'
+           f'q={query}&'
+           f'from={one_week_ago}&'
+           f'sortBy=popularity&'
+           f'language=en&'
+           f'pageSize=5&'
+           f'apiKey={api_key}')
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.json().get('articles', [])
+
+# ▼▼▼ NEW FUNCTION TO SUMMARIZE TEXT ▼▼▼
+def summarize_text_with_ai(text_to_summarize, openai_client):
+    """Summarizes a piece of text using the OpenAI API."""
+    if not text_to_summarize:
+        return "(No description available to summarize)"
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo", # A cost-effective and fast model
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest."},
+                {"role": "user", "content": f"Please summarize this into one sentence: '{text_to_summarize}'"}
+            ],
+            temperature=0.5, # Keep the summary factual
+            max_tokens=80,
+        )
+        summary = response.choices[0].message.content.strip()
+        return summary
+    except Exception as e:
+        print(f"Error during OpenAI call: {e}")
+        return "(AI summary failed to generate)"
+# ▲▲▲ END OF NEW FUNCTION ▲▲▲
+
+def format_digest_for_email(articles):
+    """Formats a professional HTML email digest using AI summaries."""
+    if not articles:
+        return "No significant fraud news found this week."
+
+    html_body = """
+    <html>
+    <head></head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+        <h2>Weekly Fraud & Security News Digest</h2>
+        <p>Here are the top AI-summarized stories from the past week:</p>
+    """
+    for article in articles:
+        title = article['title']
+        url = article['url']
+        source = article['source']
+        ai_summary = article['ai_summary'] # <-- Get the AI summary
+        html_body += f'<hr><p><strong><a href="{url}" target="_blank">{title}</a></strong><br><small>Source: {source}</small><br><em>{ai_summary}</em></p>'
+
+    html_body += '<br><p><em>Automated digest by your friendly AI-powered Givi-bot.</em></p></body></html>'
+    return html_body
+
+def format_digest_for_linkedin(articles):
+    """Formats a concise, engaging LinkedIn post."""
+    if not articles:
+        return None
+    top_two = articles[:2]
+    post_text = "This week's top fraud & security updates:\n\n"
+    for article in top_two:
+        post_text += f"➡️ {article['title']}\n{article['url']}\n\n"
+    post_text += "#FraudPrevention #CyberSecurity #Fintech #RiskManagement #SecurityNews"
+    return post_text
+
+def send_email(html_body, secrets):
+    """Sends the digest to multiple recipients using AWS SES."""
+    ses_client = boto3.client('ses', region_name=REGION_NAME)
+    recipient_list = secrets['RECIPIENT_EMAIL'].split(',')
+    try:
+        ses_client.send_email(
+            Source=secrets['SENDER_EMAIL'],
+            Destination={'ToAddresses': recipient_list},
+            Message={
+                'Subject': {'Data': f"Your Weekly Fraud News Digest - {datetime.now().strftime('%Y-%m-%d')}"},
+                'Body': {'Html': {'Data': html_body}}
+            }
+        )
+        print(f"Email sent successfully to: {', '.join(recipient_list)}")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+def post_to_linkedin(post_text, secrets):
+    """Posts the digest to LinkedIn."""
+    if not post_text:
+        print("No content to post to LinkedIn.")
+        return
+    headers = {
+        'Authorization': f"Bearer {secrets['LINKEDIN_ACCESS_TOKEN']}",
+        'Content-Type': 'application/json', 'X-Restli-Protocol-Version': '2.0.0'
+    }
+    payload = {
+        "author": secrets['LINKEDIN_AUTHOR_URN'], "lifecycleState": "PUBLISHED",
+        "specificContent": { "com.linkedin.ugc.ShareContent": {
+            "shareCommentary": {"text": post_text}, "shareMediaCategory": "NONE"
+        }},
+        "visibility": { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" }
+    }
+    response = requests.post("https://api.linkedin.com/v2/ugcPosts", headers=headers, json=payload)
+    if 200 <= response.status_code < 300:
+        print("Posted to LinkedIn successfully!")
+    else:
+        print(f"Error posting to LinkedIn: {response.status_code} - {response.text}")
+
+def lambda_handler(event, context):
+    """Main function for AWS Lambda."""
+    print("Agent starting...")
+    try:
+        secrets = get_secrets()
+        
+        # ▼▼▼ NEW: Initialize OpenAI client once ▼▼▼
+        openai_client = OpenAI(api_key=secrets['OPENAI_API_KEY'])
+        
+        if 'SENDER_EMAIL' not in secrets or 'RECIPIENT_EMAIL' not in secrets:
+            raise ValueError("SENDER_EMAIL and RECIPIENT_EMAIL must be in secrets")
+
+        raw_articles = get_fraud_news(secrets['NEWS_API_KEY'])
+        
+        # ▼▼▼ NEW: Process articles to add AI summaries ▼▼▼
+        processed_articles = []
+        for article in raw_articles:
+            # The NewsAPI gives a 'description' or 'content' field. We'll use it.
+            text_to_summarize = article.get('description') or article.get('content', '')
+            
+            ai_summary = summarize_text_with_ai(text_to_summarize, openai_client)
+            
+            processed_articles.append({
+                'title': article['title'],
+                'url': article['url'],
+                'source': article['source']['name'],
+                'ai_summary': ai_summary # Add the new summary to our article object
+            })
+
+        # Pass the new, enhanced article list to the formatting functions
+        email_html = format_digest_for_email(processed_articles)
+        send_email(email_html, secrets)
+
+        linkedin_text = format_digest_for_linkedin(processed_articles)
+        post_to_linkedin(linkedin_text, secrets)
+
+        print("Agent finished.")
+        return {'statusCode': 200, 'body': json.dumps('Process completed!')}
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise e
+```
+
+-----
+
+### **Step 5: Deploy Your Upgraded Agent**
+
+You know what to do\! Thanks to our CI/CD pipeline, this is the easy part.
+
+1.  Save your updated `requirements.txt` and `lambda_function.py` files.
+2.  Commit and push the changes to GitHub:
+    ```bash
+    git add .
+    git commit -m "feat: Add AI summarization to news digest"
+    git push origin main
+    ```
+3.  Go to the **Actions** tab in your GitHub repository and watch your pipeline build and deploy your new, much smarter agent.
+
+Once it's deployed, trigger a test run from the Lambda console to see the AI summaries in the logs and in the email you receive\!
+
+
 
 
 ----------------------
