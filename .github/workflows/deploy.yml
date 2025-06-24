@@ -1,7 +1,6 @@
 # Name of our automated workflow
 name: Deploy Fraud News Agent to AWS Lambda
 
-# This section defines the trigger: run this workflow on a push to the 'main' branch
 on:
   push:
     branches:
@@ -17,29 +16,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # ▼▼▼ THIS IS THE NEW, ROBUST BUILD PROCESS ▼▼▼
-      # ------------------------------------------------------------------
+      # ▼▼▼ NEW DEBUGGING STEP ▼▼▼
+      # This will show us what files are in the workspace BEFORE the Docker step
+      - name: List files in workspace
+        run: ls -laR
+
+      # Step 2: Build the package, now with an internal file listing for debug
       - name: Build deployment package inside Lambda container
-        # We use an official AWS base image for Python 3.12 that mimics the Lambda environment
-        # This ensures all compiled libraries (like grpcio) match the Lambda runtime
         uses: docker://public.ecr.aws/sam/build-python3.13
         with:
-          # These are the commands that will run *inside* the Docker container
           entrypoint: /bin/bash
+          # I've added a command at the start to list files from INSIDE the container
           args: > 
             -c "
-              mkdir -p /asset-output/package &&
+              echo '--- Listing files inside /var/task from the container ---' &&
+              ls -laR /var/task/ &&
+              echo '--- Starting build ---' &&
+              pip install --upgrade pip
               pip install -r /var/task/requirements.txt -t /asset-output/package &&
               cp /var/task/lambda_function.py /asset-output/package/ &&
               cd /asset-output/package &&
               zip -r ../deployment_package.zip .
             "
-      # ------------------------------------------------------------------
-      # ▲▲▲ END OF THE NEW BUILD PROCESS ▲▲▲
-      # ------------------------------------------------------------------
 
-      # Step 2: Configure the AWS credentials (this stays the same)
+      # The rest of the steps remain the same...
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,6 +47,5 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1 
 
-      # Step 3: Deploy the zip file to AWS Lambda (this stays the same)
       - name: Deploy to AWS Lambda
         run: aws lambda update-function-code --function-name FraudNewsAgent --zip-file fileb://deployment_package.zip
