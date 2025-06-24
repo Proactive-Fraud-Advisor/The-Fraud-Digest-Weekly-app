@@ -17,45 +17,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up the Python environment to match our Lambda runtime
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # ------------------------------------------------------------------
+      # ▼▼▼ THIS IS THE NEW, ROBUST BUILD PROCESS ▼▼▼
+      # ------------------------------------------------------------------
+      - name: Build deployment package inside Lambda container
+        # We use an official AWS base image for Python 3.12 that mimics the Lambda environment
+        # This ensures all compiled libraries (like grpcio) match the Lambda runtime
+        uses: docker://public.ecr.aws/sam/build-python3.13
         with:
-          python-version: '3.12' 
+          # These are the commands that will run *inside* the Docker container
+          entrypoint: /bin/bash
+          args: > 
+            -c "
+              mkdir -p /asset-output/package &&
+              pip install -r /var/task/requirements.txt -t /asset-output/package &&
+              cp /var/task/lambda_function.py /asset-output/package/ &&
+              cd /asset-output/package &&
+              zip -r ../deployment_package.zip .
+            "
+      # ------------------------------------------------------------------
+      # ▲▲▲ END OF THE NEW BUILD PROCESS ▲▲▲
+      # ------------------------------------------------------------------
 
-      # Step 3: Create a directory to hold the package contents
-      - name: Create package directory
-        run: mkdir ./package
-
-      # Step 4: Install our project's dependencies into the package directory
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -t ./package
-
-      # Step 5: Add our function code to the package directory
-      - name: Add function code to package
-        run: cp lambda_function.py ./package/
-
-      # Step 6: Create the zip file from the contents of the package folder
-      - name: Zip deployment package
-        run: |
-          cd package
-          zip -r ../deployment_package.zip .
-
-      # Step 7: Configure the AWS credentials using the secrets we stored in GitHub
+      # Step 2: Configure the AWS credentials (this stays the same)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # ------------------------------------------------------------------
-          # ▼▼▼ IMPORTANT! CHANGE THIS TO YOUR AWS REGION! ▼▼▼
           aws-region: eu-north-1 
-          # ------------------------------------------------------------------
 
-      # Step 8: Deploy the zip file to AWS Lambda using the AWS CLI
+      # Step 3: Deploy the zip file to AWS Lambda (this stays the same)
       - name: Deploy to AWS Lambda
         run: aws lambda update-function-code --function-name FraudNewsAgent --zip-file fileb://deployment_package.zip
-
-
