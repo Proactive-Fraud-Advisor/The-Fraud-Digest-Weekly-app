@@ -8,38 +8,37 @@ on:
 
 jobs:
   deploy:
-    # This job will run on a fresh, clean version of Ubuntu Linux
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Check out a copy of your code from the repository
+      # Step 1: Check out a copy of your code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ▼▼▼ NEW DEBUGGING STEP ▼▼▼
       # This will show us what files are in the workspace BEFORE the Docker step
       - name: List files in workspace
         run: ls -laR
-
-      # Step 2: Build the package, now with an internal file listing for debug
+      # Step 2: Build the package inside the correct container
       - name: Build deployment package inside Lambda container
         uses: docker://public.ecr.aws/sam/build-python3.13
         with:
           entrypoint: /bin/bash
-          # I've added a command at the start to list files from INSIDE the container
+          # ------------------------------------------------------------------
+          # ▼▼▼ THE FIX: Using /github/workspace instead of /var/task ▼▼▼
+          # ------------------------------------------------------------------
           args: > 
             -c "
               echo '--- Listing files inside /var/task from the container ---' &&
               ls -laR /var/task/ &&
               echo '--- Starting build ---' &&
               pip install --upgrade pip
-              pip install -r /var/task/requirements.txt -t /asset-output/package &&
-              cp /var/task/lambda_function.py /asset-output/package/ &&
-              cd /asset-output/package &&
+              pip install -r /github/workspace/requirements.txt -t /github/workspace/package &&
+              cp /github/workspace/lambda_function.py /github/workspace/package/ &&
+              cd /github/workspace/package &&
               zip -r ../deployment_package.zip .
             "
 
-      # The rest of the steps remain the same...
+      # Step 3: Configure AWS Credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,5 +46,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1 
 
+      # Step 4: Deploy the final package to AWS Lambda
       - name: Deploy to AWS Lambda
         run: aws lambda update-function-code --function-name FraudNewsAgent --zip-file fileb://deployment_package.zip
