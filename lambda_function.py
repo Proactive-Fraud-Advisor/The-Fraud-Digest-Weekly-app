@@ -54,7 +54,7 @@ def summarize_text_with_gemini(text_to_summarize, api_key):
                                       generation_config=generation_config)
         
         # Construct the prompt
-        prompt = f"You are an expert assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest. Summarize this into one sentence: '{text_to_summarize}'"
+        prompt = f"You are an expert assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest. Summarize this into five lines paragraph: '{text_to_summarize}'"
 
         response = model.generate_content(prompt)
         summary = response.text.strip()
@@ -81,7 +81,7 @@ def format_digest_for_linkedin(articles):
     """Formats a concise, engaging LinkedIn post."""
     if not articles:
         return None
-    top_two = articles[:3]
+    top_two = articles[:4]
     post_text = "This week's top fraud & security updates:\n\n"
     for article in top_two:
         post_text += f"➡️ {article['title']}\n{article['url']}\n\n"
