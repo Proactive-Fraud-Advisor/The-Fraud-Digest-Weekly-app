@@ -50,7 +50,7 @@ def summarize_text_with_gemini(text_to_summarize, api_key):
         generation_config = {"temperature": 0.5, "max_output_tokens": 80000}
         
         # Create the specific model instance
-        model = genai.GenerativeModel(model_name="gemini-2.5-pro-latest",
+        model = genai.GenerativeModel(model_name="gemini-2.5-pro",
                                       generation_config=generation_config)
         
         # Construct the prompt
