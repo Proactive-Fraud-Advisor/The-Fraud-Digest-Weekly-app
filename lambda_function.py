@@ -22,19 +22,25 @@ def get_secrets():
     return json.loads(secret)
 
 def get_fraud_news(api_key):
-    """Fetches fraud-related news from the last week."""
-    one_week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-    query = '("payment fraud" OR "financial crime" OR "identity theft" OR "kyc" OR "aml") AND (update OR news OR trend OR breach)'
+    """Fetches fraud-related news from yesterday."""
+    # CHANGE 1: Set the timeframe to 1 day (yesterday) instead of 7.
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    query = '("payment fraud" OR "financial crime" OR "identity theft" OR "kyc" OR "aml" OR "spam" OR "scam schema") AND (update OR news OR trend OR breach)'
+    
     url = (f'https://newsapi.org/v2/everything?'
            f'q={query}&'
-           f'from={one_week_ago}&'
+           f'from={yesterday}&' # <-- Use the new 'yesterday' variable here
            f'sortBy=popularity&'
            f'language=en&'
-           f'pageSize=5&'
+           # CHANGE 2: Reduce the number of articles from 5 to 3.
+           f'pageSize=3&'
            f'apiKey={api_key}')
+           
     response = requests.get(url)
     response.raise_for_status()
     return response.json().get('articles', [])
+
 
 def summarize_text_with_openai(text_to_summarize, openai_client):
     """Summarizes text using the OpenAI API."""
