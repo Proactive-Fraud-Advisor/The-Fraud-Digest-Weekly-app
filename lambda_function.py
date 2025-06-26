@@ -10,7 +10,7 @@ SECRET_NAME = os.environ.get('SECRET_NAME', "rod/FraudNewsAgent/ApiKeys")
 REGION_NAME = os.environ.get('AWS_REGION', "eu-north-1")
 
 def get_secrets():
-    """Retrieves secrets from AWS Secrets Manager."""
+    """Retrieves secrets from AWS Secrets Manager."""  
     session = boto3.session.Session()
     client = session.client(service_name='secretsmanager', region_name=REGION_NAME)
     try:
@@ -47,10 +47,10 @@ def summarize_text_with_gemini(text_to_summarize, api_key):
         genai.configure(api_key=api_key)
         
         # Set up the model configuration
-        generation_config = {"temperature": 0.5, "max_output_tokens": 80}
+        generation_config = {"temperature": 0.5, "max_output_tokens": 80000}
         
         # Create the specific model instance
-        model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest",
+        model = genai.GenerativeModel(model_name="gemini-2.5-pro-latest",
                                       generation_config=generation_config)
         
         # Construct the prompt
@@ -81,7 +81,7 @@ def format_digest_for_linkedin(articles):
     """Formats a concise, engaging LinkedIn post."""
     if not articles:
         return None
-    top_two = articles[:2]
+    top_two = articles[:3]
     post_text = "This week's top fraud & security updates:\n\n"
     for article in top_two:
         post_text += f"➡️ {article['title']}\n{article['url']}\n\n"
