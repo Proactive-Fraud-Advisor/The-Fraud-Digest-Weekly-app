@@ -3,14 +3,14 @@ import os
 import requests
 import boto3
 from datetime import datetime, timedelta
-import google.generativeai as genai # <--- NEW: Import the Google Gemini library
+from openai import OpenAI # Using the OpenAI library
 
-# Name of the secret in AWS Secrets Manager
-SECRET_NAME = os.environ.get('SECRET_NAME', "rod/FraudNewsAgent/ApiKeys")
+# Secret name in AWS Secrets Manager
+SECRET_NAME = os.environ.get('SECRET_NAME', "prod/FraudNewsAgent/ApiKeys")
 REGION_NAME = os.environ.get('AWS_REGION', "eu-north-1")
 
 def get_secrets():
-    """Retrieves secrets from AWS Secrets Manager."""  
+    """Retrieves secrets from AWS Secrets Manager."""
     session = boto3.session.Session()
     client = session.client(service_name='secretsmanager', region_name=REGION_NAME)
     try:
@@ -36,52 +36,45 @@ def get_fraud_news(api_key):
     response.raise_for_status()
     return response.json().get('articles', [])
 
-# ▼▼▼ NEW FUNCTION TO SUMMARIZE WITH GEMINI ▼▼▼
-def summarize_text_with_gemini(text_to_summarize, api_key):
-    """Summarizes text using the Google Gemini API."""
+def summarize_text_with_openai(text_to_summarize, openai_client):
+    """Summarizes text using the OpenAI API."""
     if not text_to_summarize:
         return "(No description available to summarize)"
 
     try:
-        # Configure the API key for the Gemini library
-        genai.configure(api_key=api_key)
-        
-        # Set up the model configuration
-        generation_config = {"temperature": 0.5, "max_output_tokens": 80000}
-        
-        # Create the specific model instance
-        model = genai.GenerativeModel(model_name="gemini-2.5-pro",
-                                      generation_config=generation_config)
-        
-        # Construct the prompt
-        prompt = f"You are an expert assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest. Summarize this into five lines paragraph: '{text_to_summarize}'"
-
-        response = model.generate_content(prompt)
-        summary = response.text.strip()
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that summarizes news article descriptions into a single, concise, professional sentence for a security news digest."},
+                {"role": "user", "content": f"Please summarize this into one sentence: '{text_to_summarize}'"}
+            ],
+            temperature=0.5,
+            max_tokens=80,
+        )
+        summary = response.choices[0].message.content.strip()
         return summary
     except Exception as e:
-        print(f"Error during Gemini API call: {e}")
+        print(f"Error during OpenAI API call: {e}")
         return "(AI summary failed to generate)"
-# ▲▲▲ END OF NEW FUNCTION ▲▲▲
 
 def format_digest_for_email(articles):
-    """Formats a professional HTML email digest using AI summaries."""
+    """Formats a professional HTML email digest with AI summaries."""
     if not articles:
         return "No significant fraud news found this week."
     html_body = """
     <html><head></head><body style="font-family: Arial, sans-serif; line-height: 1.6;">
         <h2>Weekly Fraud & Security News Digest</h2>
-        <p>Here are the top AI-summarized stories from the past week:</p>"""
+        <p>Here are the top stories from the past week:</p>"""
     for article in articles:
         html_body += f'<hr><p><strong><a href="{article["url"]}" target="_blank">{article["title"]}</a></strong><br><small>Source: {article["source"]}</small><br><em>{article["ai_summary"]}</em></p>'
-    html_body += '<br><p><em>Automated digest by your friendly AI-powered Givi-bot.</em></p></body></html>'
+    html_body += '<br><p><em>Automated digest by EV&GiVi.</em></p></body></html>'
     return html_body
 
 def format_digest_for_linkedin(articles):
     """Formats a concise, engaging LinkedIn post."""
     if not articles:
         return None
-    top_two = articles[:4]
+    top_two = articles[:2]
     post_text = "This week's top fraud & security updates:\n\n"
     for article in top_two:
         post_text += f"➡️ {article['title']}\n{article['url']}\n\n"
@@ -89,6 +82,7 @@ def format_digest_for_linkedin(articles):
     return post_text
 
 def send_email(html_body, secrets):
+    """Sends the digest to multiple recipients using AWS SES."""
     ses_client = boto3.client('ses', region_name=REGION_NAME)
     recipient_list = secrets['RECIPIENT_EMAIL'].split(',')
     try:
@@ -101,6 +95,7 @@ def send_email(html_body, secrets):
         print(f"Error sending email: {e}")
 
 def post_to_linkedin(post_text, secrets):
+    """Posts the digest to LinkedIn."""
     if not post_text:
         print("No content to post to LinkedIn."); return
     headers = {'Authorization': f"Bearer {secrets['LINKEDIN_ACCESS_TOKEN']}", 'Content-Type': 'application/json', 'X-Restli-Protocol-Version': '2.0.0'}
@@ -115,9 +110,11 @@ def post_to_linkedin(post_text, secrets):
 
 def lambda_handler(event, context):
     """Main function for AWS Lambda."""
-    print("Agent starting now !!!")
+    print("Agent starting...")
     try:
         secrets = get_secrets()
+        
+        openai_client = OpenAI(api_key=secrets['OPENAI_API_KEY'])
         
         if 'SENDER_EMAIL' not in secrets or 'RECIPIENT_EMAIL' not in secrets:
             raise ValueError("SENDER_EMAIL and RECIPIENT_EMAIL must be in secrets")
@@ -127,8 +124,7 @@ def lambda_handler(event, context):
         processed_articles = []
         for article in raw_articles:
             text_to_summarize = article.get('description') or article.get('content', '')
-            # ▼▼▼ USE THE NEW GEMINI FUNCTION ▼▼▼
-            ai_summary = summarize_text_with_gemini(text_to_summarize, secrets['GOOGLE_API_KEY'])
+            ai_summary = summarize_text_with_openai(text_to_summarize, openai_client)
             
             processed_articles.append({
                 'title': article['title'], 'url': article['url'],
@@ -142,7 +138,7 @@ def lambda_handler(event, context):
         post_to_linkedin(linkedin_text, secrets)
 
         print("Agent finished.")
-        return {'statusCode': 200, 'body': json.dumps('Process completed!')}
+        return {'statusCode': 200, 'body': json.dumps('Process completed successfully!')}
     except Exception as e:
         print(f"An error occurred: {e}")
         raise e
